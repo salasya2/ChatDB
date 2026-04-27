@@ -19,8 +19,11 @@ FROM nginx:alpine
 # Copy the built assets from the builder stage
 COPY --from=builder /app/dist /usr/share/nginx/html
 
-# Copy the custom Nginx configuration to enable API proxying
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+# Remove the default Nginx config to prevent conflicts
+RUN rm /etc/nginx/conf.d/default.conf
+
+# Copy our custom Nginx configuration
+COPY nginx.conf /etc/nginx/conf.d/chess.conf
 
 # Expose port 443 (HTTPS)
 EXPOSE 443

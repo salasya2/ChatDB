@@ -111,9 +111,31 @@ kubectl port-forward svc/frontend-service 8080:80
 
 ---
 
-## How it Works (Briefly)
+## Deep Dive: How it Works
 
-1. **Upload Database**: Upload a `.sqlite` database and descriptive `.csv` files via the UI to build an `index.json`.
-2. **Ask a Question**: Type a natural language query or use the voice recorder.
-3. **Pipeline Execution**: The system checks the Redis semantic cache. On a miss, it routes through the IR (Keywords), SS (Schema Pruning), and CG (SQL Generation) agents via Llama-3.3-70b.
-4. **View Results**: The generated SQL executes against the SQLite database, returning the query and data table.
+The CHESS SQL framework solves the problem of "schema overflow" (feeding too much database context into an LLM) by using a multi-stage filtering pipeline.
+
+### 1. Database Indexing
+Before querying, the system creates an `index.json` representing your database. It extracts:
+- All tables and columns using `PRAGMA` statements.
+- **Foreign Key Relationships** to understand how tables connect.
+- **Sample Values**: For low-cardinality text columns, it extracts unique values. For numeric columns, it calculates MIN, MAX, and AVG.
+- **Manual Descriptions**: It merges user-provided `.csv` descriptions to give the LLM business context for specific columns.
+
+### 2. Semantic Caching (Redis)
+When a natural language query arrives, it is first embedded using the `sentence-transformers/all-MiniLM-L6-v2` model. This embedding is compared against past successful queries stored in Redis. If a query with a cosine distance $< 0.10$ is found, the system immediately returns the cached SQL, bypassing the LLMs entirely.
+
+### 3. The Three-Stage Agentic Pipeline (Llama-3.3-70b)
+If there is a cache miss, the query enters the pipeline:
+
+* **Stage 1: Information Retrieval (IR) Agent**
+  The IR agent looks at the user's raw query and extracts the core **Entities** (e.g., "Alameda county") and **Keywords** (e.g., "Charter School"). It searches the `index.json` to identify which tables *might* be relevant.
+
+* **Stage 2: Schema Selection (SS) Agent**
+  The SS agent takes the tables identified by the IR agent and further prunes them. It filters down the exact columns needed to answer the query, completely discarding irrelevant tables and columns to create a "pruned schema."
+
+* **Stage 3: Candidate Generation (CG) Agent**
+  The CG agent receives the user's query alongside the highly pruned schema (formatted as `CREATE TABLE` DDL statements) and the foreign key relationships. Because the context window is now small and highly relevant, the Llama-3 model can generate highly accurate SQL without being confused by an entire massive database schema.
+
+### 4. Execution
+The generated SQL is executed locally against the SQLite database. If successful, the result set is returned to the user, and the Natural Language $\rightarrow$ SQL pair is saved to the Redis Semantic Cache.

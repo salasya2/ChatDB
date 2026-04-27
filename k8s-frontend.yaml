@@ -17,15 +17,7 @@ spec:
         image: chess-frontend:latest
         imagePullPolicy: IfNotPresent
         ports:
-        - containerPort: 443
-        volumeMounts:
-        - name: tls-certs
-          mountPath: /etc/nginx/certs
-          readOnly: true
-      volumes:
-      - name: tls-certs
-        secret:
-          secretName: chess-tls
+        - containerPort: 80
 
 ---
 
@@ -39,6 +31,6 @@ spec:
     app: chess-frontend
   ports:
   - protocol: TCP
-    port: 443
-    targetPort: 443
+    port: 80
+    targetPort: 80
 

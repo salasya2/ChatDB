@@ -111,31 +111,82 @@ kubectl port-forward svc/frontend-service 8080:80
 
 ---
 
-## Deep Dive: How it Works
+## Using the Application
 
-The CHESS SQL framework solves the problem of "schema overflow" (feeding too much database context into an LLM) by using a multi-stage filtering pipeline.
+The application is a two-step interface: first you build an index from your database, then you query it in natural language.
 
-### 1. Database Indexing
-Before querying, the system creates an `index.json` representing your database. It extracts:
-- All tables and columns using `PRAGMA` statements.
-- **Foreign Key Relationships** to understand how tables connect.
-- **Sample Values**: For low-cardinality text columns, it extracts unique values. For numeric columns, it calculates MIN, MAX, and AVG.
-- **Manual Descriptions**: It merges user-provided `.csv` descriptions to give the LLM business context for specific columns.
+---
 
-### 2. Semantic Caching (Redis)
-When a natural language query arrives, it is first embedded using the `sentence-transformers/all-MiniLM-L6-v2` model. This embedding is compared against past successful queries stored in Redis. If a query with a cosine distance $< 0.10$ is found, the system immediately returns the cached SQL, bypassing the LLMs entirely.
+### Step 1: Build Your Index (`index.json`)
 
-### 3. The Three-Stage Agentic Pipeline (Llama-3.3-70b)
-If there is a cache miss, the query enters the pipeline:
+Before you can query, you need to index your database. Navigate to the **Build Index** screen (Step 1 in the UI).
 
-* **Stage 1: Information Retrieval (IR) Agent**
-  The IR agent looks at the user's raw query and extracts the core **Entities** (e.g., "Alameda county") and **Keywords** (e.g., "Charter School"). It searches the `index.json` to identify which tables *might* be relevant.
+#### What files do you need to upload?
 
-* **Stage 2: Schema Selection (SS) Agent**
-  The SS agent takes the tables identified by the IR agent and further prunes them. It filters down the exact columns needed to answer the query, completely discarding irrelevant tables and columns to create a "pruned schema."
+| File | Required | Description |
+|---|---|---|
+| `database.sqlite` or `database.db` | ✅ Yes | Your SQLite database file |
+| `<table_name>.csv` per table | ❌ Optional | Description CSVs to enrich column context |
 
-* **Stage 3: Candidate Generation (CG) Agent**
-  The CG agent receives the user's query alongside the highly pruned schema (formatted as `CREATE TABLE` DDL statements) and the foreign key relationships. Because the context window is now small and highly relevant, the Llama-3 model can generate highly accurate SQL without being confused by an entire massive database schema.
+#### What are the Description CSVs?
+Each `.csv` file maps column names to human-readable descriptions. This helps the LLM understand what a column like `FRPM_Count` actually means. Each CSV should be named after its corresponding table (e.g., `schools.csv`) and must contain these columns:
 
-### 4. Execution
-The generated SQL is executed locally against the SQLite database. If successful, the result set is returned to the user, and the Natural Language $\rightarrow$ SQL pair is saved to the Redis Semantic Cache.
+```
+original_column_name, value_description
+```
+
+Example `schools.csv`:
+```csv
+original_column_name,value_description
+CDSCode,Unique identifier for each school in California
+FundingType,"Type of funding: Directly funded or Locally funded"
+```
+
+> **Tip**: CSVs are optional but significantly improve query accuracy for databases with unclear column names.
+
+#### How to build the index
+1. Click **Choose File** under *SQLite Database File* and select your `.sqlite` or `.db` file.
+2. (Optional) Click **Choose Files** under *Value Description CSVs* and select one or more `.csv` files.
+3. Click **Upload & Build index.json**.
+4. A progress bar will track the stages: reading schema, sampling values, mapping foreign keys, and writing the index.
+5. Once complete, click **Continue to Query Interface**.
+
+The generated `index.json` is saved to the `/index` directory on the server and will be used for all subsequent queries.
+
+---
+
+### Step 2: Querying Your Database
+
+After building the index, you are taken to the **Query Interface** (Step 2 in the UI).
+
+#### Typing a Query
+1. Click the text box at the bottom of the screen.
+2. Type your question in plain English, for example:
+   - *"Which schools have the highest SAT math scores?"*
+   - *"Show me the top 10 schools by enrollment in Alameda county"*
+   - *"Find charter schools in San Francisco with free meal eligibility over 50%"*
+3. Press **Enter** to send (or **Shift+Enter** to add a new line).
+4. The assistant will reply with:
+   - A natural language answer
+   - The generated SQL query (with a copy button)
+   - A paginated results table
+
+#### Using Suggestion Pills
+When the chat is empty, clickable example queries appear as suggestion pills. Click any of them to instantly fire a pre-written query against your database.
+
+---
+
+### Step 3: Voice Querying
+
+The application supports real-time voice-to-SQL via your microphone.
+
+#### How to use it
+1. Click the **🎙️ microphone button** to the right of the text input.
+   - Your browser will ask for microphone permission — click **Allow**.
+2. Speak your question clearly, e.g. *"List all schools in San Francisco."*
+   - A live status bubble (`🎤 Listening...`) will appear in the chat.
+3. Click the **⏹ stop button** when you are done speaking.
+4. Your speech is transcribed via **Whisper-large-v3** and the transcript appears in the chat bubble.
+5. The query runs through the pipeline and results are returned exactly as they would be for a typed query.
+
+> **Note**: Voice querying requires microphone access and a running backend WebSocket connection at `/api/ws-voice`.
